@@ -1,0 +1,110 @@
+from __future__ import annotations
+import operator
+from typing import Annotated, Any, Literal, TypedDict
+from langchain_core.messages import BaseMessage
+from langgraph.graph.message import add_messages
+class Plan(TypedDict, total=False):
+    tables: list[str]
+    columns: list[str]
+    filters: list[str]
+    aggregations: list[str]
+    notes: str
+NodeName = Literal["supervisor", "planner", "query_agent", "analyst", "verifier", "__end__"]
+class AnalystState(TypedDict, total=False):
+    customer_message: str
+    thread_id: str
+    messages: Annotated[list[BaseMessage], add_messages]
+    plan: Plan | None
+    sql: str | None
+    query_result: list[dict[str, Any]] | None
+    query_error: str | None
+    draft_response: str | None
+    response: str | None
+    is_verified: bool | None
+    next_node: NodeName | None
+    supervisor_reason: str | None
+    iteration: int
+    node_trace: Annotated[list[str], operator.add]
+def supervisor_node(state: AnalystState) -> dict:
+    question = (state.get("customer_message") or "").strip()
+    iteration = state.get("iteration", 0)
+    if not question:
+        return {"next_node": "__end__", "response": "Please ask an analytics question.", "node_trace": ["supervisor"]}
+    if not state.get("plan"):
+        return {"next_node": "planner", "supervisor_reason": "No plan yet", "node_trace": ["supervisor"]}
+    if state.get("plan") and not state.get("sql") and not state.get("query_error"):
+        return {"next_node": "query_agent", "node_trace": ["supervisor"]}
+    if state.get("query_error") and iteration < 2:
+        return {"next_node": "query_agent", "iteration": iteration + 1, "node_trace": ["supervisor"]}
+    if state.get("query_result") is not None and not state.get("draft_response"):
+        return {"next_node": "analyst", "node_trace": ["supervisor"]}
+    if state.get("draft_response") and state.get("is_verified") is None:
+        return {"next_node": "verifier", "node_trace": ["supervisor"]}
+    if state.get("is_verified") is True:
+        return {"next_node": "__end__", "response": state.get("draft_response"), "node_trace": ["supervisor"]}
+    return {"next_node": "__end__", "node_trace": ["supervisor"]}
+from pydantic import BaseModel, Field
+class PlanOutput(BaseModel):
+    tables: list[str] = Field(description="Tables to query")
+    columns: list[str] = Field(description="Relevant columns")
+    filters: list[str] = Field(description="WHERE conditions in plain English")
+    aggregations: list[str] = Field(description="GROUP BY / aggregates needed")
+    notes: str = Field(default="", description="Multi-step or join notes")
+class SQLDraft(BaseModel):
+    sql: str = Field(description="Single read-only SELECT statement")
+def planner_node(state: AnalystState) -> dict:
+    structured = llm.with_structured_output(PlanOutput)
+    plan_out: PlanOutput = structured.invoke([SystemMessage(content=PLANNER_SYSTEM), HumanMessage(content=f"User question: {state.get('customer_message', '')}")])
+    plan: Plan = {"tables": plan_out.tables, "columns": plan_out.columns, "filters": plan_out.filters, "aggregations": plan_out.aggregations, "notes": plan_out.notes}
+    return {"plan": plan, "node_trace": ["planner"]}
+def query_agent_node(state: AnalystState) -> dict:
+    result = run_readonly_sql(sql)
+    if "error" in result:
+        return {"sql": sql, "query_error": result["error"], "query_result": None, "node_trace": ["query_agent"]}
+    return {"sql": sql, "query_error": None, "query_result": result["rows"], "node_trace": ["query_agent"]}
+def route_after_supervisor(state: AnalystState) -> NodeName:
+    nxt = state.get("next_node") or "__end__"
+    if nxt == "__end__":
+        return "__end__"
+    return nxt
+from langgraph.checkpoint.memory import MemorySaver
+from langgraph.graph import END, StateGraph
+def build_graph(*, with_checkpointer: bool = True):
+    graph = StateGraph(AnalystState)
+    graph.add_node("supervisor", supervisor_node)
+    graph.add_node("planner", planner_node)
+    graph.add_node("query_agent", query_agent_node)
+    graph.add_node("analyst", analyst_node)
+    graph.add_node("verifier", verifier_node)
+    graph.set_entry_point("supervisor")
+    graph.add_conditional_edges("supervisor", route_after_supervisor, {"planner": "planner", "query_agent": "query_agent", "analyst": "analyst", "verifier": "verifier", "__end__": END})
+    for worker in ("planner", "query_agent", "analyst", "verifier"):
+        graph.add_edge(worker, "supervisor")
+    checkpointer = MemorySaver() if with_checkpointer else None
+    return graph.compile(checkpointer=checkpointer)
+def run_question(*, question: str, thread_id: str, graph=None) -> AnalystState:
+    app = graph or build_graph()
+    config = {"configurable": {"thread_id": thread_id}}
+    initial: AnalystState = {"customer_message": question, "thread_id": thread_id, "plan": None, "sql": None, "query_result": None, "query_error": None, "draft_response": None, "response": None, "is_verified": None, "next_node": None, "iteration": 0, "node_trace": []}
+    final = app.invoke(initial, config=config)
+    return final
+def run_readonly_sql(sql: str, db_path: Path | None = None) -> dict[str, Any]:
+    rows = [dict(row) for row in cur.fetchall()]
+    return {"rows": rows, "row_count": len(rows)}
+def verifier_node(state: AnalystState) -> dict:
+    draft = state.get("draft_response") or ""
+    rows = state.get("query_result")
+    return {"is_verified": True, "node_trace": ["verifier"]}
+plan: Plan | None
+sql: str | None
+query_result: list[dict[str, Any]] | None
+query_error: str | None
+draft_response: str | None
+is_verified: bool | None
+next_node: NodeName | None
+messages: Annotated[list[BaseMessage], add_messages]
+node_trace: Annotated[list[str], operator.add]
+structured = llm.with_structured_output(PlanOutput)
+config = {"configurable": {"thread_id": thread_id}}
+graph = StateGraph(AnalystState)
+graph.add_conditional_edges("supervisor", route_after_supervisor, {"__end__": END})
