@@ -24,7 +24,7 @@ def supervisor_node(state: AnalystState) -> dict:
             "supervisor_reason": "no relevant query asked",
             "done": True,
             "node_trace": ["supervisor"],
-            "final_answer": "Please enter a relevant data request"
+            "response": "Please enter a relevant data request"
         }
     
     if not state.get("plan"):
@@ -33,6 +33,18 @@ def supervisor_node(state: AnalystState) -> dict:
             "supervisor_reason": "no plan created yet",
             "done": False,
             "node_trace": ["supervisor"]
+        }
+
+    plan = state.get("plan") or {}
+    if not plan.get("tables"):
+        return {
+            "next_node": "__end__",
+            "supervisor_reason": "plan has no tables — question not actionable",
+            "done": True,
+            "node_trace": ["supervisor"],
+            "response": (
+                "Please ask a specific analytics question about RelayBoard "
+            ),
         }
     
     if not state.get("query_result") and not state.get("query_error") and not state.get("sql"):
@@ -77,23 +89,39 @@ def supervisor_node(state: AnalystState) -> dict:
             "node_trace": ["supervisor"]
         }
     
-    if state.get("is_verified") == False:
+    if state.get("is_verified") is False:
         if iteration < ITERATION_LIMIT:
-            return {
-                    "next_node":"query_agent",
+            notes = (state.get("verification_notes") or "").lower()
+            retry_query = "number" in notes and "not in query_result" in notes
+            if retry_query:
+                return {
+                    "next_node": "query_agent",
                     "done": False,
-                    "supervisor_reason": "query agent output not verified try again",
-                    "iteration": iteration+1,
-                    "node_trace": ["supervisor"]
+                    "supervisor_reason": "query agent output not grounded try again",
+                    "iteration": iteration + 1,
+                    "is_verified": None,
+                    "draft_response": None,
+                    "sql": None,
+                    "query_result": None,
+                    "node_trace": ["supervisor"],
                 }
-        else:
-            return{
-                "next_node": "__end__",
-                "supervisor_reason":"sql values not verified and iteration limit reached",
-                "done": True,
-                "node_trace": ["supervisor"]
+            return {
+                "next_node": "analyst",
+                "done": False,
+                "supervisor_reason": "query_result ok draft_response incorrect",
+                "iteration": iteration + 1,
+                "is_verified": None,
+                "node_trace": ["supervisor"],
             }
-            
+        return {
+            "next_node": "__end__",
+            "supervisor_reason": "sql values not verified and iteration limit reached",
+            "done": True,
+            "response": state.get("draft_response")
+            or "Unable to verify answer against query results.",
+            "node_trace": ["supervisor"],
+        }
+
     if state.get("is_verified") is True:
         return {
             "next_node": "__end__",

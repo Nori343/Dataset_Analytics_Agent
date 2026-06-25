@@ -28,7 +28,7 @@ class AnalystState(TypedDict, total=False):
     query_result: list[dict[str, any]] | None
     query_error: str | None
     is_verified: bool | None
-    verfication_notes: str | None
+    verification_notes: str | None
     draft_response: str | None
     response: str | None
     iteration: int | None

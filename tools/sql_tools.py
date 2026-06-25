@@ -62,7 +62,6 @@ def run_readonly_sql(sql: str, db_path: Path | None = None) -> dict[str, Any]:
         conn.execute(f"PRAGMA query_only = ON")
         conn.execute(f"PRAGMA busy_timeout = 3000")
         cur = conn.cursor()
-        cur.execute(f"SELECT 1 WHERE (SELECT 1) AND (? > 0)", (SQL_QUERY_TIMEOUT_SECONDS,))
         cur.execute(sql)
         rows = [dict(row) for row in cur.fetchall()]
         conn.close()
@@ -71,3 +70,31 @@ def run_readonly_sql(sql: str, db_path: Path | None = None) -> dict[str, Any]:
         return {"error": f"SQL execution error: {exc}"}
     except Exception as exc:  # noqa: BLE001 — surface any DB error to agent
         return {"error": f"Unexpected error: {exc}"}
+
+
+def my_read_only_sql(sql: str, db_path: Path | None = None):
+    path = db_path or DB_PATH
+
+    validation = _validate_sql(sql)
+
+    if not path:
+        return {"error": "no valid db path to query"}
+
+    if validation:
+        return {"error": "validation"}
+    else:
+        try:
+            conn = sqlite3.connect(path)
+            conn.row_factory = sqlite3.Row
+            conn.execute(f'PRAGMA query_only=ON')
+            conn.execute(f"PRAGMA busy_timeout = 3000")
+            curr = conn.cursor()
+            curr.execute(sql)
+            rows = [dict(row) for row in curr.fetchall()]
+            conn.close()
+            return {"rows": rows, "row_count": len(rows)}
+        except sqlite3.OperationalError as exc:
+                return {"error": f"SQL execution error: {exc}"}
+        except Exception as exc:  # noqa: BLE001 — surface any DB error to agent
+                return {"error": f"Unexpected error: {exc}"}
+        

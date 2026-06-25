@@ -12,26 +12,30 @@ class AnalystOutput(BaseModel):
 def analyst_node(state: AnalystState) -> dict:
     rows = state.get("query_result") or []
     if not OPENAI_API_KEY:
-        nums = []
-        for row in rows:
-            for v in row.values():
-                if isinstance(v, (int, float)):
-                    nums.append(f"{v:.2f}" if isinstance(v, float) else str(v))
-        draft = f"Results: {', '.join(nums[:6])}."
+        if rows:
+            nums = []
+            for row in rows:
+                for v in row.values():
+                    if isinstance(v, (int, float)):
+                        nums.append(f"{v:.2f}" if isinstance(v, float) else str(v))
+            draft = f"Results: {', '.join(nums[:6])}."
+        else:
+            draft = "Unable to generate answer without query results or API key."
     else:
         query = state.get("customer_message")
         sql_result = state.get("query_result")
         sql = state.get("sql")
-        
+
         llm = ChatOpenAI(api_key=OPENAI_API_KEY, model=OPENAI_MODEL)
         structured = llm.with_structured_output(AnalystOutput)
-        draft = structured.invoke([
+        out: AnalystOutput = structured.invoke([
             SystemMessage(ANLAYST),
             HumanMessage(f"Query: {query} \n\n sql: {sql} \n\n sql_result: {sql_result}")
         ])
+        draft = out.draft_response
 
     return {
-        "draft_response": draft.draft_response,
-        "messages": [AIMessage(draft.draft_response)],
+        "draft_response": draft,
+        "messages": [AIMessage(content=draft)],
         "node_trace": ["analyst"]
     }

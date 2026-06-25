@@ -58,13 +58,18 @@ def _flatten_values(rows: list[dict[str, Any]]) -> list[float]:
 
 def _number_in_results(num: float, result_nums: list[float]) -> bool:
     "check if num in result_nums"
-    for rv in result_nums:
-        if abs(num - rv) <= max(0.01, abs(rv) * FLOAT_TOLERANCE):
-            return True
-        # Also match rounded display forms (e.g. 1234.56 → 1,234.56 won't match comma form
-        # but integer rounding should)
-        if abs(round(num) - round(rv)) <= 1 and abs(rv) > 100:
-            return True
+    candidates = [num]
+    if 0 < num <= 1:
+        candidates.append(num * 100)
+    elif 0 < num <= 100:
+        candidates.append(num / 100)
+
+    for candidate in candidates:
+        for rv in result_nums:
+            if abs(candidate - rv) <= max(0.01, abs(rv) * FLOAT_TOLERANCE):
+                return True
+            if abs(round(candidate) - round(rv)) <= 1 and abs(rv) > 100:
+                return True
     return False
 
 
